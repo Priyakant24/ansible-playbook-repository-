@@ -1,0 +1,10 @@
+---
+- name: Install Telnet client on RHEL 10
+  hosts: managed
+  become: yes
+  tasks:
+    - name: Install telnet client
+      yum:
+        name: telnet
+        state: present
+

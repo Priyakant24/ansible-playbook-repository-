@@ -1,0 +1,6 @@
+- name: Test connection
+  hosts: managed
+  become: yes
+  tasks:
+    - name: Ping all nodes
+      ping:

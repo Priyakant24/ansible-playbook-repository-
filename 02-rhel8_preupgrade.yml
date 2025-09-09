@@ -1,0 +1,113 @@
+---
+- name: In-place PreUpgrade RHEL 7 to RHEL 8 Upgrade Using Leapp
+  hosts: all
+  become: true
+  vars:
+    date_suffix: "{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+
+  tasks:
+    - name: Fix /usr/bin/sh symlink if broken or missing
+      raw: |
+        if [ -L /usr/bin/sh ]; then
+          unlink /usr/bin/sh
+          ln -s /bin/bash /usr/bin/sh
+        elif [ ! -e /usr/bin/sh ]; then
+          ln -s /bin/bash /usr/bin/sh
+        fi
+
+    - name: Regenerate GRUB config
+      command: grub2-mkconfig -o /boot/grub2/grub.cfg
+
+    - name: Enable required repos
+      shell: |
+        subscription-manager repos \
+          --enable rhel-7-server-rpms \
+          --enable rhel-7-server-els-rpms \
+          --enable rhel-7-server-extras-rpms
+        subscription-manager release --unset
+
+    - name: Update all packages and install leapp
+      shell: |
+        yum update -y
+        yum install leapp-upgrade -y
+
+    - name: Reboot after update
+      reboot:
+        reboot_timeout: 300
+
+    - name: Wait for system after reboot
+      wait_for_connection:
+        timeout: 180
+
+    - name: Get running kernel version
+      command: uname -r
+      register: running_kernel
+
+    - name: Get latest installed kernel version
+      shell: rpm -q --last kernel | awk '{print $1}' | head -n1
+      register: latest_kernel_rpm
+
+    - name: Fail if not booted into the latest installed kernel
+      fail:
+        msg: >
+          ❌ System is not booted into the latest installed kernel.
+          Current: {{ running_kernel.stdout }}
+          Latest: {{ latest_kernel_rpm.stdout | regex_replace('kernel-', '') }}
+          Please reboot into the latest kernel before proceeding with the upgrade.
+      when: running_kernel.stdout != (latest_kernel_rpm.stdout | regex_replace('kernel-', ''))
+
+    - name: Backup sshd_config and comment MACs
+      block:
+        - name: Backup sshd_config
+          command: cp /etc/ssh/sshd_config /etc/ssh/sshd_config.{{ date_suffix }}
+
+        - name: Comment out lines starting with MACs in sshd_config
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: '^(MACs.*)'
+            line: '#\1'
+            backrefs: yes
+
+    - name: Backup PAM password-auth-ac
+      command: cp /etc/pam.d/password-auth-ac /etc/pam.d/password-auth-ac.{{ date_suffix }}
+
+    - name: Blacklist floppy and pata modules
+      shell: |
+        modprobe -r floppy || true
+        modprobe -r pata_acpi || true
+        echo -e "blacklist floppy\nblacklist pata_acpi\ninstall floppy /bin/false\ninstall pata_acpi /bin/false" >> /etc/modprobe.d/local-dontload.conf
+
+    - name: Backup and regenerate initramfs
+      shell: |
+        cp /boot/initramfs-$(uname -r).img /boot/initramfs-$(uname -r).img.{{ date_suffix }}.bak
+        dracut --omit-drivers "floppy pata_acpi" -f
+
+    - name: Add kernel parameters to GRUB
+      shell: |
+        sed -i '/^GRUB_CMDLINE_LINUX=/s/"$/ floppy.blacklist=1 rd.driver.blacklist=floppy"/' /etc/default/grub
+        sed -i '/^GRUB_CMDLINE_LINUX=/s/"$/ pata.blacklist=1 rd.driver.blacklist=pata_acpi"/' /etc/default/grub
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+
+    - name: Backup kdump image and update config
+      shell: |
+        cp /boot/initramfs-$(uname -r)kdump.img /boot/initramfs-$(uname -r)kdump.img.{{ date_suffix }}.bak
+        sed -i '/^KDUMP_COMMANDLINE_APPEND=/s/"$/ rd.driver.blacklist=floppy"/' /etc/sysconfig/kdump
+        sed -i '/^KDUMP_COMMANDLINE_APPEND=/s/"$/ rd.driver.blacklist=pata_acpi"/' /etc/sysconfig/kdump
+        kdumpctl restart
+        mkdumprd -f /boot/initramfs-$(uname -r)kdump.img
+
+    - name: Reboot to apply kernel changes
+      reboot:
+        reboot_timeout: 300
+
+    - name: Wait for server after reboot
+      wait_for_connection:
+        timeout: 180
+
+    - name: Run Leapp pre-upgrade
+      command: leapp preupgrade --target 8.10
+      register: leapp_preupgrade_result
+      ignore_errors: true  # Prevent Ansible from failing the task
+
+
+
