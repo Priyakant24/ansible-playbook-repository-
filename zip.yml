@@ -1,0 +1,10 @@
+---
+- name: Install a package on managed nodes
+  hosts: all
+  become: true
+  tasks:
+    - name: Install zip
+      ansible.builtin.package:
+        name: zip
+        state: present
+

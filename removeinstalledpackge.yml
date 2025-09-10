@@ -1,0 +1,21 @@
+---
+- name: Rollback DNF transaction 16 and reboot the machine
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Roll back to DNF transaction 15 (undo transaction 16)
+      ansible.builtin.command: dnf history rollback 15 -y
+      register: rollback_result
+      changed_when: "'Complete!' in rollback_result.stdout"
+
+    - name: Reboot the system after rollback
+      ansible.builtin.reboot:
+        msg: "Reboot after rolling back transaction 16"
+        connect_timeout: 5
+        reboot_timeout: 600
+
+    - name: Wait for server to come back online after reboot
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+

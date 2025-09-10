@@ -1,0 +1,11 @@
+---
+- name: Apply security updates only (yum/dnf equivalent of 'yum update --security')
+  hosts: all
+  become: yes
+  tasks:
+    - name: Apply security updates using dnf/yum
+      ansible.builtin.package:
+        name: "*"
+        state: latest
+        security: yes
+
